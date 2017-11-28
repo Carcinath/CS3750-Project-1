@@ -1,296 +1,158 @@
-import java.io.BufferedInputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.ObjectInputStream;
-import java.io.OutputStream;
+package Sender;
+
+import java.io.*;
 import java.math.BigInteger;
 import java.security.DigestInputStream;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
-import java.security.PrivateKey;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
 import java.security.PublicKey;
 import java.security.SecureRandom;
-import java.security.spec.RSAPrivateKeySpec;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.KeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Scanner;
 
+import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class Sender {
 
-	private static int BUFFER_SIZE = 32*1024;
-	static String messageName;
+	private static final String YPUBLIC = "YPublic.key";
+	private static final String AES = "symmetric.key";
+	private static final String MESSAGEOUTPUT = "message.dd";
+	private static final String AESENCRYPTION = "message.add-msg";
+	private static final String RSAENCRYPTION = "message.rsacipher";
+	private static int BUFFER_SIZE = 32 * 1024;
+	static String IV = "1234567890ABCDEF";
 	
-	public static void main(String[] args) throws Exception {
-		// TODO Auto-generated method stub
-		//Reading Keys
-		PublicKey yPubKey = readPubKeyFromFile("YPublic.key");
-		SecretKeySpec symKey = readSymKeyFromFile("symmetric.key");
+	
+	public static void main(String[] args) throws IOException, NoSuchAlgorithmException, NoSuchProviderException, 
+												  NoSuchPaddingException, InvalidKeyException, 
+												  InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException {
+	
+		SecureRandom random = new SecureRandom();
 		
-		//Getting the message
-		Scanner input = new Scanner(System.in);
+		//Getting the name of the message
 		System.out.println("Input the name of the message: ");
-		messageName = input.nextLine();
+		Scanner userInput = new Scanner(System.in);
+		String messageName = userInput.nextLine();
 		
-		//Get SHA
-		msgDigest(messageName);
+		//Reading the YPublic Key
+		ObjectInputStream yPublicFile = new ObjectInputStream( new BufferedInputStream( new FileInputStream (YPUBLIC)));
 		
-		//AES Encrypt
-		encryptAES("message.dd", symKey);
+		BigInteger yPublicMod = null;
+		try {
+			yPublicMod = (BigInteger) yPublicFile.readObject();
+		} catch (ClassNotFoundException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		BigInteger yPublicExp = null;
+		try {
+			yPublicExp = (BigInteger) yPublicFile.readObject();
+		} catch (ClassNotFoundException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		
+		RSAPublicKeySpec keySpec = new RSAPublicKeySpec(yPublicMod, yPublicExp);
+		KeyFactory factory = KeyFactory.getInstance("RSA");
+		PublicKey yPublic = null;
+		try {
+			yPublic = factory.generatePublic(keySpec);
+		} catch (InvalidKeySpecException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+
+		
+		//Reading the Symmetric Key
+		FileReader symKey = new FileReader(AES);
+		BufferedReader symmetricKey = new BufferedReader(symKey);
+		String aesSymmetricKey = symmetricKey.readLine();
+		symmetricKey.close();
+		
+		//Sha Hashing.
+		FileInputStream messageFile = new FileInputStream(messageName);
+		BufferedInputStream theMessage = new BufferedInputStream(messageFile);
+		MessageDigest md = MessageDigest.getInstance("SHA-256");
+		DigestInputStream in = new DigestInputStream(theMessage, md);
+		int i;
+		byte[] buffer = new byte[BUFFER_SIZE];
+		do {
+			i = in.read(buffer, 0, BUFFER_SIZE);
+		} while (i == BUFFER_SIZE);
+		md = in.getMessageDigest();
+		in.close();
+		
+		byte[] hash = md.digest();
+		
+		ObjectOutputStream shaHash = new ObjectOutputStream(
+				new BufferedOutputStream (new FileOutputStream(MESSAGEOUTPUT)));
+		for(int k=0,j=0; k<hash.length; k++, j++) {
+			System.out.format("%2X", new Byte(hash[k]), "\n");
+			shaHash.writeObject(hash[k]);
+			shaHash.flush();
+			if(j >= 15) {
+				System.out.println("");
+				j= -1;
+			}
+		}
+		//AES Encryption
+		Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding", "SunJCE");
+		SecretKeySpec key = new SecretKeySpec(aesSymmetricKey.getBytes("UTF-8"),"AES");
+		cipher.init(cipher.ENCRYPT_MODE, key, new IvParameterSpec(IV.getBytes("UTF-8")));
+		FileOutputStream aesFile = new FileOutputStream(AESENCRYPTION);
+		byte[] encryption = cipher.doFinal(hash);
+		
+		for(int k=0,j=0; k<encryption.length; k++,j++) {
+			System.out.format("%2x", new Byte(encryption[k]), "\n");
+			if(j >= encryption.length) {
+				System.out.println("");
+				j= -1;
+			}
+		}
+		try {
+			aesFile.write(cipher.doFinal(encryption));
+			//aesFile.write(theMessage.read());
+		} catch (IllegalBlockSizeException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (BadPaddingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+			
+		finally{
+		aesFile.close();
+			}
 		
 		//RSA Encryption
-		encryptRSA("message.dd", yPubKey, "message.rsacipher");
+		FileInputStream aesRead = new FileInputStream(AESENCRYPTION);
+		Cipher cipherRSA = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+		byte[] aesShaInput = new byte[117];
+		int index;
+		do {
+			index = aesRead.read(aesShaInput, 0, 117);
+		} while (index == 117);
 		
-		
+		cipherRSA.init(cipherRSA.ENCRYPT_MODE, yPublic, random);
+		byte[] encryptedAes = cipherRSA.doFinal(aesShaInput);
+	//	byte[] cipherText = 
+	//			cipherRSA.doFinal(aesShaInput);
+		ObjectOutputStream rsaCipher = 
+				new ObjectOutputStream(new BufferedOutputStream ( new FileOutputStream(RSAENCRYPTION)));
+			rsaCipher.writeObject(encryptedAes);
+			rsaCipher.writeObject(aesShaInput);
+			rsaCipher.flush();
+		}
 	}
-	  /**
-	   * Calculating the digital digest (SHA256) of the message file
-	   */
-	  public static void msgDigest(String msgFileName) throws Exception 
-	  {
-	    BufferedInputStream file = new BufferedInputStream(new FileInputStream(msgFileName));
-	    MessageDigest md = MessageDigest.getInstance("SHA-256");
-	    DigestInputStream in = new DigestInputStream(file, md);
-	    int i;
-	    byte[] buffer = new byte[BUFFER_SIZE];
-	    do {
-	      i = in.read(buffer, 0, BUFFER_SIZE);
-	    } while (i == BUFFER_SIZE);
-	    md = in.getMessageDigest();
-	    in.close();
 
-	    byte[] hash = md.digest();
-
-	    //Print the hashed message
-	    System.out.println("\nDigit digest of the message (hash value):");
-	    print(hash);    
-
-	    //Then save the hashed message to a file
-	    saveToFile("message.dd", hash, false);
-	    
-	  }//End msgDigest()
-	  
-	  
-	  /**
-	   * Calculating the RSA encryption of the digital digest (SHA256)
-	   */
-	  public static void encryptRSA(String fileName, PublicKey yPubKey, 
-	                                String msgFileName) throws Exception 
-	  {
-	    Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-	    SecureRandom random = new SecureRandom();
-	    InputStream in = new FileInputStream(fileName);
-	    
-	    //Encrypt the hash value with RSA encryption
-	    byte[] hashContents = new byte[117];
-	    int i = 0;
-	    cipher.init(Cipher.ENCRYPT_MODE, yPubKey, random);
-	    byte[] cipherText = new byte[BUFFER_SIZE];
-	    //Then save RSA cipher text to a file with the message at the end
-	    while( i != -1) {
-	    	i = in.read(hashContents);
-	    	if( i == 117 ) {
-	    	cipherText = cipher.update(hashContents);
-	    	}
-	    	if ( i == -1) {
-	    		cipherText = cipher.doFinal(hashContents);
-	    	}
-	    }
-	    saveToFile( "message.rsacipher", cipherText, true);
-	    in.close();
-	    
-	    
-	    //Print the RSA encrypted hash
-	 //   System.out.println("RSA encrypted cypher text of the SHA256:");
-	 //   print(cipherText);
-	    
-	    //Then save RSA cipher text to a file with the message at the end
-	//    saveToFile( "message.rsacipher", cipherText, true);
-	  }//End encryptRSA()
-	  
-	  
-	  /**
-	   * Appends the message to the String from the parameter
-	   */
-	  public static void appendMsg(String encryptFileName, byte[] cipherText,
-	                               String msgFileName) throws Exception 
-	  {
-	    InputStream in = new FileInputStream(msgFileName);
-	    byte[] msgContents = new byte[BUFFER_SIZE];
-	    int bytesRead = 0;
-	    
-	    //RSA encrypted hash
-	    saveToFile(encryptFileName, cipherText, false);
-	    
-	    //Message
-	    while( (bytesRead = in.read(msgContents)) != -1 )
-	    {
-	      if(bytesRead == BUFFER_SIZE)
-	      {
-	         saveToFile(encryptFileName, msgContents, true);
-	      }
-	      else //Adjust array before saving to file
-	      {
-	         byte[] tempRemains = new byte[bytesRead];
-	         
-	         for(int parser = 0; parser < bytesRead; parser++)
-	            tempRemains[parser] = msgContents[parser];
-	         
-	         saveToFile(encryptFileName, tempRemains, true);
-	      }
-	      
-	    }//End while - buffer each block
-	    in.close();
-	  }//End appendMsg()
-	  
-	  
-	  /**
-	   * Encrpts the RSA encrypted message with AES encryption using the symmetric key
-	   */
-	  public static void encryptAES(String encryptAES, SecretKeySpec symKey) throws Exception 
-	  {
-	    Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding", "SunJCE");
-	    cipher.init(Cipher.ENCRYPT_MODE, symKey);
-	    
-	    InputStream in = new FileInputStream(encryptAES);
-	    byte[] contents = new byte[BUFFER_SIZE],
-	           cipherText = new byte[BUFFER_SIZE];
-	    boolean firstBlock = true,
-	            append = true;
-	    int bytesRead = 0;
-	    
-	    while( (bytesRead = in.read(contents)) != -1 )
-	    {
-	      append = true;
-	      if(firstBlock)
-	      {
-	         firstBlock = false;
-	         append = false;
-	      }
-	      
-	      if(bytesRead == BUFFER_SIZE)
-	      {
-	         cipherText = cipher.update(contents);
-	         saveToFile("message.add-msg", cipherText, append);
-	      }
-	      else //Adjust array before saving to file
-	      {
-	         byte[] tempRemains = new byte[bytesRead];
-	         
-	         for(int parser = 0; parser < bytesRead; parser++)
-	            tempRemains[parser] = contents[parser];
-	         
-	         cipherText = cipher.doFinal(tempRemains);
-	 	    //Then save RSA cipher text to a file with the message at the end
-	 	    appendMsg( "message.add-msg", cipherText, messageName);
-	        // saveToFile("message.aescipher", cipherText, append);
-	      }
-	      
-	    }//End while - buffer each block
-	    in.close();
-	    
-	  }//End encryptAES()
-	  
-	  
-	  /**
-	   * Prints out the array in the parameter
-	   */
-	  public static void print(byte[] arrayToPrint) //throws Exception 
-	  {
-	    for (int k=0, j=0; k < arrayToPrint.length; k++, j++) 
-	    {
-	      System.out.format("%2X ", new Byte(arrayToPrint[k]) ) ;
-	      
-	      if (j >= 15) 
-	      {
-	        System.out.println("");
-	        j=-1;
-	      }
-	    }
-	    System.out.println("");
-	  }//End print()
-	  
-	  
-	  /**
-	    * save the contents of the byte array to file
-	    */
-	   public static void saveToFile(String fileName, byte[] contents,
-	                                 boolean appendToFile) throws IOException 
-	   {
-	      //Open file
-	      OutputStream out = null;
-	      if(appendToFile)
-	         out = new FileOutputStream(fileName, appendToFile);
-	      else
-	         out = new FileOutputStream(fileName);
-	      
-	      //Write to file
-	      try {
-	         out.write(contents);
-	         out.flush();
-	      } catch (Exception e) {
-	         throw new IOException("Unexpected error", e);
-	      } finally {
-	         out.close();
-	      }
-	      
-	   }//End saveToFile()
-
-
-	  /**
-	   * read key parameters from a file and generate the private key
-	   */
-	  public static PublicKey readPubKeyFromFile(String keyFileName) throws IOException 
-	  {
-
-	 //   InputStream in = 
-	 //       Sender.class.getResourceAsStream(keyFileName);
-		  FileInputStream in = new FileInputStream(new File(keyFileName));
-	    ObjectInputStream oin =
-	        new ObjectInputStream(new BufferedInputStream(in));
-
-	    try {
-	      BigInteger m = (BigInteger) oin.readObject();
-	      BigInteger e = (BigInteger) oin.readObject();
-
-	      RSAPublicKeySpec keySpec = new RSAPublicKeySpec(m, e);
-	      KeyFactory factory = KeyFactory.getInstance("RSA");
-	      PublicKey key = factory.generatePublic(keySpec);
-
-	      return key;
-	    } catch (Exception e) {
-	      throw new RuntimeException("Spurious serialisation error", e);
-	    } finally {
-	      oin.close();
-	    }
-	  }//End readPrivKeyFromFile()
-
-
-	  /**
-	   * read symmetric key from a file
-	   */
-	  public static SecretKeySpec readSymKeyFromFile(String keyFileName) throws IOException 
-	  {
-
-	//    InputStream in = 
-	//        Sender.class.getResourceAsStream(keyFileName);
-		  FileInputStream in = new FileInputStream( new File(keyFileName));
-	    ObjectInputStream oin =
-	        new ObjectInputStream(new BufferedInputStream(in));
-
-	    try {
-	      String tempSymKey = oin.readUTF();
-	      SecretKeySpec symKey = new SecretKeySpec(tempSymKey.getBytes("UTF-8"), "AES");
-	      return symKey;
-	    } catch (Exception e) {
-	      throw new RuntimeException("Spurious serialisation error", e);
-	    } finally {
-	      oin.close();
-	    }
-	  }
-
-}
